@@ -5,21 +5,32 @@
 
 TFT_eSPI tft;
 
-// Williams J603 -> SN74LVC245A -> TTGO ESP32
-constexpr int PIN_RD    = 26;  // J603 pin 3
-constexpr int PIN_DCLK  = 33;  // J603 pin 9
-constexpr int PIN_SDATA = 13;  // J603 pin 11
+// Williams DMD input wiring
+constexpr int PIN_RD    = 26;
+constexpr int PIN_DCLK  = 33;
+constexpr int PIN_SDATA = 13;
 
-constexpr int WIDTH = 128;
-constexpr int HEIGHT = 32;
+// DMD geometry
+constexpr int DMD_WIDTH = 128;
+constexpr int DMD_HEIGHT = 32;
 constexpr int BYTES_PER_ROW = 16;
 constexpr int FRAME_BYTES = 512;
 
+// Capture timing
 constexpr uint32_t FRAME_TIMEOUT_MS = 40;
 constexpr uint32_t ROW_TIMEOUT_US = 600;
 constexpr uint32_t FRAME_CAPTURE_TIMEOUT_US = 9000;
 
+// LCD layout
+constexpr int DISPLAY_X = 56;
+constexpr int DISPLAY_Y = 35;
+constexpr uint16_t DMD_ORANGE = 0xFD20;
+
 uint8_t frame[FRAME_BYTES];
+
+uint32_t attempts = 0;
+uint32_t complete = 0;
+uint32_t failures = 0;
 
 static inline bool readClock() {
     return (GPIO.in1.val & (1UL << 1)) != 0;
@@ -54,7 +65,7 @@ int captureRow(uint8_t *destination) {
 
     int captured = 0;
 
-    for (int bit = 0; bit < WIDTH; bit++) {
+    for (int bit = 0; bit < DMD_WIDTH; bit++) {
         while (readClock()) {
             if ((uint32_t)(ESP.getCycleCount() - startCycles)
                 > timeoutCycles)
@@ -88,16 +99,18 @@ bool captureFrame() {
 
     noInterrupts();
 
-    for (int row = 0; row < HEIGHT; row++) {
+    for (int row = 0; row < DMD_HEIGHT; row++) {
         if ((uint32_t)(micros() - startUs)
             > FRAME_CAPTURE_TIMEOUT_US) {
             interrupts();
             return false;
         }
 
-        int bits = captureRow(&frame[row * BYTES_PER_ROW]);
+        int bits = captureRow(
+            &frame[row * BYTES_PER_ROW]
+        );
 
-        if (bits != WIDTH) {
+        if (bits != DMD_WIDTH) {
             interrupts();
             return false;
         }
@@ -107,43 +120,54 @@ bool captureFrame() {
     return true;
 }
 
-bool validateTopRow() {
-    for (int col = 0; col < BYTES_PER_ROW; col++) {
-        if (frame[col] != 0xFF)
-            return false;
-    }
-
-    for (int i = BYTES_PER_ROW; i < FRAME_BYTES; i++) {
-        if (frame[i] != 0x00)
-            return false;
-    }
-
-    return true;
-}
-
-void printFrameSummary(bool valid) {
-    Serial.printf(
-        "FRAME: %s | Row0: ",
-        valid ? "MATCH" : "DIFFERENT"
+void drawFrame() {
+    tft.fillRect(
+        DISPLAY_X,
+        DISPLAY_Y,
+        DMD_WIDTH,
+        DMD_HEIGHT,
+        TFT_BLACK
     );
 
-    for (int i = 0; i < BYTES_PER_ROW; i++)
-        Serial.printf("%02X ", frame[i]);
+    for (int y = 0; y < DMD_HEIGHT; y++) {
+        for (int x = 0; x < DMD_WIDTH; x++) {
+            int index = y * BYTES_PER_ROW + (x / 8);
+            uint8_t mask = 0x80 >> (x % 8);
 
-    Serial.println();
-
-    for (int row = 0; row < HEIGHT; row++) {
-        int lit = 0;
-
-        for (int col = 0; col < BYTES_PER_ROW; col++) {
-            lit += __builtin_popcount(
-                frame[row * BYTES_PER_ROW + col]
-            );
+            if (frame[index] & mask) {
+                tft.drawPixel(
+                    DISPLAY_X + x,
+                    DISPLAY_Y + y,
+                    DMD_ORANGE
+                );
+            }
         }
-
-        Serial.printf("%d%s", lit,
-                      row == HEIGHT - 1 ? "\n" : ",");
     }
+}
+
+void drawStatus() {
+    tft.fillRect(0, 85, 240, 50, TFT_BLACK);
+
+    tft.setTextSize(1);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+
+    tft.setCursor(10, 90);
+    tft.printf(
+        "Frames: %lu",
+        (unsigned long)complete
+    );
+
+    tft.setCursor(10, 105);
+    tft.printf(
+        "Failures: %lu",
+        (unsigned long)failures
+    );
+
+    tft.setCursor(10, 120);
+    tft.printf(
+        "Attempts: %lu",
+        (unsigned long)attempts
+    );
 }
 
 void setup() {
@@ -160,54 +184,38 @@ void setup() {
     tft.init();
     tft.setRotation(1);
     tft.fillScreen(TFT_BLACK);
+
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setTextSize(2);
+    tft.setCursor(10, 8);
+    tft.println("DMD CAPTURE V0.7");
 
     Serial.println();
     Serial.println("PINBALL DMD CAPTURE");
-    Serial.println("Diagnostic V0.6");
-    Serial.println("Full 128x32 frame capture");
-    Serial.println("Expected: Row0=128, Rows1-31=0");
+    Serial.println("Diagnostic V0.7");
+    Serial.println("Full frame capture + LCD display");
 }
 
 void loop() {
-    static uint32_t attempts = 0;
-    static uint32_t complete = 0;
-    static uint32_t matches = 0;
-
     attempts++;
 
     if (captureFrame()) {
         complete++;
-
-        bool valid = validateTopRow();
-
-        if (valid)
-            matches++;
-
-        printFrameSummary(valid);
+        drawFrame();
     } else {
-        Serial.println("FRAME: INCOMPLETE");
+        failures++;
     }
 
     if (attempts % 10 == 0) {
+        drawStatus();
+
         Serial.printf(
-            "SUMMARY: attempts=%lu complete=%lu matches=%lu\n",
+            "SUMMARY: attempts=%lu complete=%lu failures=%lu\n",
             (unsigned long)attempts,
             (unsigned long)complete,
-            (unsigned long)matches
+            (unsigned long)failures
         );
-
-        tft.fillScreen(TFT_BLACK);
-        tft.setTextSize(2);
-        tft.setCursor(10, 10);
-        tft.println("DMD V0.6");
-
-        tft.setTextSize(1);
-        tft.setCursor(10, 50);
-        tft.printf("Attempts: %lu\n", (unsigned long)attempts);
-        tft.printf("Complete: %lu\n", (unsigned long)complete);
-        tft.printf("Matches:  %lu\n", (unsigned long)matches);
     }
 
-    delay(100);
+    delay(50);
 }
