@@ -4,98 +4,87 @@
 
 TFT_eSPI tft = TFT_eSPI();
 
-constexpr int DMD_WIDTH = 128;
-constexpr int DMD_HEIGHT = 32;
+// Williams J603 -> SN74LVC245A -> TTGO
+constexpr int PIN_DE    = 27;  // J603 pin 1
+constexpr int PIN_RD    = 26;  // J603 pin 3
+constexpr int PIN_RCLK  = 25;  // J603 pin 5
+constexpr int PIN_CL    = 32;  // J603 pin 7
+constexpr int PIN_DCLK  = 33;  // J603 pin 9
+constexpr int PIN_SDATA = 13;  // J603 pin 11
 
-enum TestPattern {
-    LEFT_COLUMN,
-    TOP_ROW,
-    BOTTOM_ROW
-};
+volatile uint32_t deCount = 0;
+volatile uint32_t rdCount = 0;
+volatile uint32_t rclkCount = 0;
+volatile uint32_t clCount = 0;
 
-void drawDMD(TestPattern pattern, const char* label) {
-    tft.fillScreen(TFT_BLACK);
-
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.setTextSize(1);
-    tft.setCursor(8, 8);
-    tft.print(label);
-
-    // Render each DMD pixel as a 1x2 LCD rectangle.
-    // 128x32 DMD becomes 128x64 on screen.
-    const int x0 = 56;
-    const int y0 = 38;
-
-    tft.drawRect(x0 - 2, y0 - 2, 132, 68, TFT_DARKGREY);
-
-    for (int y = 0; y < DMD_HEIGHT; y++) {
-        for (int x = 0; x < DMD_WIDTH; x++) {
-            bool lit = false;
-
-            switch (pattern) {
-                case LEFT_COLUMN:
-                    lit = (x == 0);
-                    break;
-                case TOP_ROW:
-                    lit = (y == 0);
-                    break;
-                case BOTTOM_ROW:
-                    lit = (y == 31);
-                    break;
-            }
-
-            if (lit) {
-                tft.fillRect(
-                    x0 + x,
-                    y0 + y * 2,
-                    1,
-                    2,
-                    TFT_ORANGE
-                );
-            }
-        }
-    }
-}
+void IRAM_ATTR onDE()   { deCount++; }
+void IRAM_ATTR onRD()   { rdCount++; }
+void IRAM_ATTR onRCLK() { rclkCount++; }
+void IRAM_ATTR onCL()   { clCount++; }
 
 void setup() {
     Serial.begin(115200);
     delay(500);
 
-    Serial.println();
-    Serial.println("PINBALL DMD CAPTURE");
-    Serial.println("LCD Diagnostic V0.2");
+    pinMode(PIN_DE, INPUT);
+    pinMode(PIN_RD, INPUT);
+    pinMode(PIN_RCLK, INPUT);
+    pinMode(PIN_CL, INPUT);
+    pinMode(PIN_DCLK, INPUT);
+    pinMode(PIN_SDATA, INPUT);
 
-    pinMode(TFT_BL, OUTPUT);
-    digitalWrite(TFT_BL, TFT_BACKLIGHT_ON);
+    attachInterrupt(digitalPinToInterrupt(PIN_DE), onDE, RISING);
+    attachInterrupt(digitalPinToInterrupt(PIN_RD), onRD, RISING);
+    attachInterrupt(digitalPinToInterrupt(PIN_RCLK), onRCLK, RISING);
+    attachInterrupt(digitalPinToInterrupt(PIN_CL), onCL, RISING);
 
     tft.init();
     tft.setRotation(1);
+    tft.fillScreen(TFT_BLACK);
 
-    Serial.println("TFT initialised");
+    Serial.println();
+    Serial.println("PINBALL DMD CAPTURE");
+    Serial.println("Diagnostic V0.3");
+    Serial.println("Counting DE, RD, RCLK and CL");
 }
 
 void loop() {
-    tft.fillScreen(TFT_RED);
-    Serial.println("RED");
-    delay(1000);
+    static uint32_t lastReport = millis();
 
-    tft.fillScreen(TFT_GREEN);
-    Serial.println("GREEN");
-    delay(1000);
+    if (millis() - lastReport >= 1000) {
+        uint32_t now = millis();
+        uint32_t elapsed = now - lastReport;
+        lastReport = now;
 
-    tft.fillScreen(TFT_BLUE);
-    Serial.println("BLUE");
-    delay(1000);
+        noInterrupts();
+        uint32_t de = deCount;
+        uint32_t rd = rdCount;
+        uint32_t rclk = rclkCount;
+        uint32_t cl = clCount;
+        deCount = rdCount = rclkCount = clCount = 0;
+        interrupts();
 
-    drawDMD(LEFT_COLUMN, "LEFT COLUMN");
-    Serial.println("LEFT COLUMN");
-    delay(2000);
+        Serial.printf(
+            "DE=%lu RD=%lu RCLK=%lu CL=%lu (over %lu ms)\n",
+            (unsigned long)de,
+            (unsigned long)rd,
+            (unsigned long)rclk,
+            (unsigned long)cl,
+            (unsigned long)elapsed
+        );
 
-    drawDMD(TOP_ROW, "TOP ROW");
-    Serial.println("TOP ROW");
-    delay(2000);
+        tft.fillScreen(TFT_BLACK);
+        tft.setTextColor(TFT_WHITE, TFT_BLACK);
+        tft.setTextSize(2);
 
-    drawDMD(BOTTOM_ROW, "BOTTOM ROW");
-    Serial.println("BOTTOM ROW");
-    delay(2000);
+        tft.setCursor(10, 10);
+        tft.println("DMD V0.3");
+
+        tft.setTextSize(1);
+        tft.setCursor(10, 50);
+        tft.printf("DE:   %lu\n", (unsigned long)de);
+        tft.printf("RD:   %lu\n", (unsigned long)rd);
+        tft.printf("RCLK: %lu\n", (unsigned long)rclk);
+        tft.printf("CL:   %lu\n", (unsigned long)cl);
+    }
 }
