@@ -6,57 +6,91 @@
 
 TFT_eSPI tft;
 
+// ============================================================
+// PINBALL DMD CAPTURE V1.1
+// Optimised TFT rendering using RGB565 framebuffer
+//
 // Williams J603 -> TTGO T-Display
+// ============================================================
+
+// DMD input pins
 constexpr int PIN_RD    = 26;
 constexpr int PIN_DCLK  = 33;
 constexpr int PIN_SDATA = 13;
 
-// DMD dimensions
+// DMD geometry
 constexpr int DMD_W = 128;
 constexpr int DMD_H = 32;
 constexpr int ROW_BYTES = 16;
 constexpr int FRAME_BYTES = 512;
+constexpr int PIXEL_COUNT = DMD_W * DMD_H;
 
-// TFT dimensions after rotation(1)
+// TFT geometry (rotation 1)
 constexpr int TFT_W = 240;
 constexpr int TFT_H = 135;
 
+// Corrected V1.0 proportions
 constexpr int SCALE_X = 1;
 constexpr int SCALE_Y = 1;
 
-constexpr int IMAGE_X = (TFT_W - DMD_W * SCALE_X) / 2;
-constexpr int IMAGE_Y = (TFT_H - DMD_H * SCALE_Y) / 2;
+constexpr int IMAGE_X =
+    (TFT_W - DMD_W * SCALE_X) / 2;
 
+constexpr int IMAGE_Y =
+    (TFT_H - DMD_H * SCALE_Y) / 2;
 
-// Capture timing
+// Capture timeouts
 constexpr uint32_t ROW_TIMEOUT_US = 600;
 constexpr uint32_t FRAME_TIMEOUT_US = 9000;
 constexpr uint32_t MARKER_TIMEOUT_US = 25000;
 
-// Three consecutive binary refreshes
+// ============================================================
+// FRAME BUFFERS
+// ============================================================
+
+// Three binary DMD refreshes
 uint8_t frames[3][FRAME_BYTES];
 
-// One byte per reconstructed DMD pixel
-uint8_t grey[DMD_W * DMD_H];
+// Reconstructed four-level image
+uint8_t grey[PIXEL_COUNT];
 
-// Four-level greyscale palette
+// RGB565 framebuffer: 128 x 32 x 2 = 8192 bytes
+uint16_t rgbFrame[PIXEL_COUNT];
+
+// Four-level palette
 const uint16_t palette[4] = {
     TFT_BLACK,
-    0x52AA,    // Approx. 1/3 brightness
-    0xAD55,    // Approx. 2/3 brightness
+    0x52AA,
+    0xAD55,
     TFT_WHITE
 };
 
+// ============================================================
+// DIAGNOSTICS
+// ============================================================
+
 uint32_t composites = 0;
 uint32_t captureErrors = 0;
+
 uint32_t lastReportMs = 0;
 uint32_t lastSignature = 0;
-uint32_t lastRenderUs = 0;
+
 uint32_t lastCaptureUs = 0;
+uint32_t lastRenderUs = 0;
+uint32_t lastConvertUs = 0;
+
+uint32_t minRenderUs = UINT32_MAX;
+uint32_t maxRenderUs = 0;
+uint64_t totalRenderUs = 0;
 
 uint16_t histogram[4] = {0};
 
-// Fast direct GPIO reads
+uint32_t previousReportComposites = 0;
+
+// ============================================================
+// FAST GPIO ACCESS
+// ============================================================
+
 static inline bool readClock() {
     return (GPIO.in1.val & (1UL << 1)) != 0;
 }
@@ -69,7 +103,10 @@ static inline bool readRD() {
     return (GPIO.in & (1UL << 26)) != 0;
 }
 
-// Wait for the next frame marker
+// ============================================================
+// FRAME SYNCHRONISATION
+// ============================================================
+
 bool waitForFrameMarker(uint32_t timeoutUs) {
     uint32_t start = micros();
 
@@ -86,26 +123,33 @@ bool waitForFrameMarker(uint32_t timeoutUs) {
     return true;
 }
 
-// Capture 128 serial bits
+// ============================================================
+// CAPTURE ONE ROW
+// ============================================================
+
 int captureRow(uint8_t *destination) {
     memset(destination, 0, ROW_BYTES);
 
     uint32_t startCycles = ESP.getCycleCount();
+
     uint32_t timeoutCycles =
         ESP.getCpuFreqMHz() * ROW_TIMEOUT_US;
 
     int captured = 0;
 
     for (int bit = 0; bit < DMD_W; bit++) {
+
         while (readClock()) {
-            if ((uint32_t)(ESP.getCycleCount() - startCycles)
-                > timeoutCycles)
+            if ((uint32_t)(
+                ESP.getCycleCount() - startCycles
+            ) > timeoutCycles)
                 return captured;
         }
 
         while (!readClock()) {
-            if ((uint32_t)(ESP.getCycleCount() - startCycles)
-                > timeoutCycles)
+            if ((uint32_t)(
+                ESP.getCycleCount() - startCycles
+            ) > timeoutCycles)
                 return captured;
         }
 
@@ -120,7 +164,10 @@ int captureRow(uint8_t *destination) {
     return captured;
 }
 
-// Capture one complete 128x32 refresh
+// ============================================================
+// CAPTURE ONE COMPLETE DMD REFRESH
+// ============================================================
+
 bool captureFrame(uint8_t *destination) {
     memset(destination, 0, FRAME_BYTES);
 
@@ -130,6 +177,7 @@ bool captureFrame(uint8_t *destination) {
     noInterrupts();
 
     for (int row = 0; row < DMD_H; row++) {
+
         if ((uint32_t)(micros() - startUs)
             > FRAME_TIMEOUT_US) {
             success = false;
@@ -151,7 +199,10 @@ bool captureFrame(uint8_t *destination) {
     return success;
 }
 
-// Acquire exactly three consecutive refreshes
+// ============================================================
+// CAPTURE THREE CONSECUTIVE REFRESHES
+// ============================================================
+
 bool captureTriple() {
     if (!waitForFrameMarker(MARKER_TIMEOUT_US))
         return false;
@@ -164,10 +215,14 @@ bool captureTriple() {
     }
 
     lastCaptureUs = micros() - start;
+
     return true;
 }
 
-// Reconstruct brightness from 3 refreshes
+// ============================================================
+// FOUR-LEVEL GREYSCALE RECONSTRUCTION
+// ============================================================
+
 void reconstructGreyscale() {
     memset(histogram, 0, sizeof(histogram));
 
@@ -176,6 +231,7 @@ void reconstructGreyscale() {
 
     for (int i = 0; i < FRAME_BYTES; i++) {
         for (int bit = 7; bit >= 0; bit--) {
+
             uint8_t mask = 1U << bit;
 
             uint8_t level =
@@ -194,67 +250,115 @@ void reconstructGreyscale() {
     lastSignature = hash;
 }
 
-// Render horizontal runs to reduce TFT commands
+// ============================================================
+// V1.1: CONVERT GREYSCALE TO RGB565
+// ============================================================
+
+void convertToRGB565() {
+    uint32_t start = micros();
+
+    for (int i = 0; i < PIXEL_COUNT; i++) {
+        rgbFrame[i] = palette[grey[i]];
+    }
+
+    lastConvertUs = micros() - start;
+}
+
+// ============================================================
+// V1.1: SINGLE-BLOCK TFT TRANSFER
+// ============================================================
+
 void renderGreyscale() {
     uint32_t start = micros();
 
-    for (int y = 0; y < DMD_H; y++) {
-        int x = 0;
+    tft.startWrite();
 
-        while (x < DMD_W) {
-            uint8_t level = grey[y * DMD_W + x];
+    tft.pushImage(
+        IMAGE_X,
+        IMAGE_Y,
+        DMD_W,
+        DMD_H,
+        rgbFrame
+    );
 
-            int runStart = x;
-            x++;
-
-            while (x < DMD_W &&
-                   grey[y * DMD_W + x] == level) {
-                x++;
-            }
-
-            tft.fillRect(
-                IMAGE_X + runStart * SCALE_X,
-                IMAGE_Y + y * SCALE_Y,
-                (x - runStart) * SCALE_X,
-                SCALE_Y,
-                palette[level]
-            );
-        }
-    }
+    tft.endWrite();
 
     lastRenderUs = micros() - start;
+
+    if (lastRenderUs < minRenderUs)
+        minRenderUs = lastRenderUs;
+
+    if (lastRenderUs > maxRenderUs)
+        maxRenderUs = lastRenderUs;
+
+    totalRenderUs += lastRenderUs;
 }
 
-void updateStatus() {
-    tft.fillRect(0, 109, TFT_W, 26, TFT_BLACK);
+// ============================================================
+// TFT STATUS
+// ============================================================
+
+void updateStatus(uint32_t fps) {
+    tft.fillRect(
+        0, 109,
+        TFT_W, 26,
+        TFT_BLACK
+    );
 
     tft.setTextSize(1);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setTextColor(
+        TFT_WHITE,
+        TFT_BLACK
+    );
 
     tft.setCursor(4, 111);
-    tft.printf("DMD V1.0  Frames: %lu",
-               (unsigned long)(composites * 3));
+    tft.printf(
+        "DMD V1.1  FPS: %lu",
+        (unsigned long)fps
+    );
 
     tft.setCursor(4, 122);
-    tft.printf("Errors: %lu  Render: %lu ms",
-               (unsigned long)captureErrors,
-               (unsigned long)(lastRenderUs / 1000));
+    tft.printf(
+        "Err:%lu  TFT:%lu us",
+        (unsigned long)captureErrors,
+        (unsigned long)lastRenderUs
+    );
 }
 
-void printDiagnostics() {
+// ============================================================
+// SERIAL DIAGNOSTICS
+// ============================================================
+
+void printDiagnostics(uint32_t fps) {
     Serial.println();
-    Serial.println("V1.0 GREYSCALE DISPLAY");
+    Serial.println("V1.1 RGB565 FRAMEBUFFER");
 
     Serial.printf(
-        "Composites=%lu Errors=%lu\n",
+        "Composites=%lu Errors=%lu FPS=%lu\n",
         (unsigned long)composites,
-        (unsigned long)captureErrors
+        (unsigned long)captureErrors,
+        (unsigned long)fps
     );
 
     Serial.printf(
-        "Capture=%lu us Render=%lu us\n",
+        "Capture=%lu us Convert=%lu us Render=%lu us\n",
         (unsigned long)lastCaptureUs,
+        (unsigned long)lastConvertUs,
         (unsigned long)lastRenderUs
+    );
+
+    uint32_t avgRenderUs =
+        composites > 0
+        ? (uint32_t)(totalRenderUs / composites)
+        : 0;
+
+    Serial.printf(
+        "Render min=%lu avg=%lu max=%lu us\n",
+        (unsigned long)(
+            minRenderUs == UINT32_MAX ? 0 : minRenderUs
+        ),
+        (unsigned long)avgRenderUs,
+        (unsigned long)maxRenderUs
     );
 
     Serial.printf(
@@ -271,6 +375,10 @@ void printDiagnostics() {
     );
 }
 
+// ============================================================
+// SETUP
+// ============================================================
+
 void setup() {
     Serial.begin(115200);
     delay(500);
@@ -284,39 +392,63 @@ void setup() {
 
     tft.init();
     tft.setRotation(1);
+    tft.setSwapBytes(true);
+
     tft.fillScreen(TFT_BLACK);
 
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setTextColor(
+        TFT_WHITE,
+        TFT_BLACK
+    );
+
     tft.setTextSize(2);
     tft.setCursor(10, 55);
-    tft.println("DMD V1.0");
+    tft.println("DMD V1.1");
 
     Serial.println();
     Serial.println("PINBALL DMD CAPTURE");
-    Serial.println("Version V1.0");
-    Serial.println("Three-frame greyscale display");
+    Serial.println("Version V1.1");
+    Serial.println("RGB565 framebuffer rendering");
 
     delay(500);
+
     tft.fillScreen(TFT_BLACK);
+    lastReportMs = millis();
 }
+
+// ============================================================
+// MAIN LOOP
+// ============================================================
 
 void loop() {
     if (captureTriple()) {
         reconstructGreyscale();
+
+        convertToRGB565();
         renderGreyscale();
+
         composites++;
     } else {
         captureErrors++;
     }
 
     uint32_t now = millis();
+    uint32_t elapsed = now - lastReportMs;
 
-    if ((uint32_t)(now - lastReportMs) >= 1000) {
-        printDiagnostics();
-        updateStatus();
+    if (elapsed >= 1000) {
+
+        uint32_t framesThisPeriod =
+            composites - previousReportComposites;
+
+        uint32_t fps =
+            (framesThisPeriod * 1000UL) / elapsed;
+
+        printDiagnostics(fps);
+        updateStatus(fps);
+
+        previousReportComposites = composites;
         lastReportMs = now;
     }
 
-    // Allow background system processing
     delay(1);
 }
