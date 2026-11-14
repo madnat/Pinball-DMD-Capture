@@ -1,0 +1,4 @@
+.pio/
+diagnostics/
+__pycache__/
+*.py[cod]

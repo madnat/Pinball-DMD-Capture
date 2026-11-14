@@ -20,3 +20,21 @@ __pycache__/
 # Local configuration and secrets
 .env
 .env.*
+
+# Independent PlatformIO experiments and local diagnostic evidence
+**/.pio/
+**/diagnostics/
+**/__pycache__/
+*.py[cod]
+
+# Keep workstation state and credential material out of future additions.
+**/.vscode/
+**/.idea/
+**/.codex/
+**/.agents/
+**/.aws/
+**/.ssh/
+**/credentials.json
+**/service-account*.json
+*.pem
+*.key

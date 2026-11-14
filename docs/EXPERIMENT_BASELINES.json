@@ -1,0 +1,33 @@
+{
+  ".": {
+    "source": "origin/main@763c700b9e2f95f57269ebde4abc97e706626c95",
+    "sha256": {
+      "src/main.cpp": "95dca7e27bfc0969c82449d3d75244939e8469dcd4d20a38ade550f0f930d8fd",
+      "platformio.ini": "b44b40169fb9507d1e5775a9b9fa9425df96e86d9a61b0e28c71ae90ecc10eed"
+    },
+    "configuration_override": {
+      "reason": "Enable deep+ discovery of framework SPI required by explicitly retained TFT_eSPI even when the sketch does not include TFT headers.",
+      "setting": "lib_ldf_mode = deep+",
+      "worktree_sha256": "2c4040e50355fcec8db92b0d2c11ff6945111d2e5a14cdd4973bfc2d6f1d3049"
+    }
+  },
+  "experiments/v1.2a-acquisition": {
+    "source": "feature/v1.2a-acquisition@8a8d0d10cccab54e51a6b5432fbf01a322859b90",
+    "sha256": {
+      "src/main.cpp": "2b87000f5b4f3621f8b4a2a4df93b231304e374d0f2b952f0570ffc3ee508daf",
+      "platformio.ini": "b44b40169fb9507d1e5775a9b9fa9425df96e86d9a61b0e28c71ae90ecc10eed"
+    },
+    "configuration_override": {
+      "reason": "Enable deep+ discovery of framework SPI required by explicitly retained TFT_eSPI even when the sketch does not include TFT headers.",
+      "setting": "lib_ldf_mode = deep+",
+      "worktree_sha256": "2c4040e50355fcec8db92b0d2c11ff6945111d2e5a14cdd4973bfc2d6f1d3049"
+    }
+  },
+  "experiments/esp32-dma-v4c": {
+    "source": "Original local ESP32_DMA_Investigation_V4c workspace (SHA-256 provenance below)",
+    "sha256": {
+      "src/main.cpp": "9efe4251b760beb2a900f6e2c2655d09940d6cd229996d0852e4dbe4000b6d56",
+      "platformio.ini": "6c65d52eb4efa8b71c94f3b5527c502acabdbb434ed622ec81b9532ad28edc22"
+    }
+  }
+}

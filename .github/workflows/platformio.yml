@@ -1,0 +1,36 @@
+name: Independent PlatformIO builds
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - .
+          - experiments/v1.2a-acquisition
+          - experiments/esp32-dma-v4c
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install PlatformIO
+        run: python -m pip install platformio==6.1.13
+      - name: Build independent project
+        env:
+          PROJECT_DIR: ${{ matrix.project }}
+        run: |
+          pio run -d "$PROJECT_DIR" -e ttgo_tdisplay -t clean
+          pio run -d "$PROJECT_DIR" -e ttgo_tdisplay
+      - name: Validate automation without hardware
+        if: matrix.project == 'experiments/esp32-dma-v4c'
+        run: |
+          sh -n experiments/esp32-dma-v4c/scripts/build.sh
+          sh -n experiments/v1.2a-acquisition/scripts/build.sh
+          python -m unittest discover -s experiments/esp32-dma-v4c/scripts -p 'test_*.py'
