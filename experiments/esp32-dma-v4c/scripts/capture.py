@@ -17,7 +17,7 @@ def duration_value(value):
     return seconds
 
 
-def collect(port, output, duration, reset=False, clock=time.monotonic, sleep=time.sleep):
+def collect(port, output, duration, reset=False, clock=time.monotonic, sleep=time.sleep, *, fixed_timeout=False):
     """Port is configured but unopened. Always close, including on reset/read errors."""
     started = clock()
     deadline = started + duration
@@ -32,7 +32,10 @@ def collect(port, output, duration, reset=False, clock=time.monotonic, sleep=tim
             finally:
                 port.rts = False
         while clock() < deadline:
-            port.timeout = min(0.2, max(0, deadline - clock()))
+            # On macOS, assigning timeout on an open pySerial port can
+            # briefly switch a custom baud rate to a termios fallback speed.
+            if not fixed_timeout:
+                port.timeout = min(0.2, max(0, deadline - clock()))
             data = port.read(min(65536, max(1, port.in_waiting)))
             if data:
                 output.write(data)
@@ -46,25 +49,33 @@ def main():
     parser.add_argument('--port', default='/dev/cu.usbserial-02073BE4')
     parser.add_argument('--duration', type=duration_value, default=45.0, metavar='SECONDS')
     parser.add_argument('--reset', action='store_true', help='Explicit RTS reset after opening')
+    parser.add_argument('--baud', type=int, choices=(115200, 460800, 921600), default=115200)
     args = parser.parse_args()
     from serial import Serial
+    if args.baud != 115200:
+        from serial.tools import list_ports
+        from upload import verify_device
+        try:
+            verify_device(args.port, list_ports.comports())
+        except ValueError as error:
+            parser.error(str(error))
     directory = ROOT / 'diagnostics'
     directory.mkdir(exist_ok=True)
     stamp = datetime.now().astimezone().strftime('%Y%m%d_%H%M%S_%f%z')
     path = directory / f'ttgo_serial_{stamp}.txt'
-    port = Serial(port=None, baudrate=115200, timeout=0.2, exclusive=True)
+    port = Serial(port=None, baudrate=args.baud, timeout=0.2, exclusive=True)
     port.port = args.port
     # Set desired states before opening. Some drivers may still glitch control lines.
     port.dtr = False
     port.rts = False
-    metadata = dict(port=args.port, baud=115200, duration_seconds=args.duration,
+    metadata = dict(port=args.port, baud=args.baud, duration_seconds=args.duration,
                     reset_requested=args.reset, started=datetime.now().astimezone().isoformat())
     started = time.monotonic()
     status = 0
     print(f'Capture: {path}', flush=True)
     try:
         with path.open('xb') as output:
-            collect(port, output, args.duration, args.reset)
+            collect(port, output, args.duration, args.reset, fixed_timeout=args.baud != 115200)
     except KeyboardInterrupt:
         metadata['error'] = 'Interrupted by user'
         status = 130

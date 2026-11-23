@@ -53,6 +53,16 @@ class AutomationTests(unittest.TestCase):
                 self.assertEqual(output.getvalue(), port.payload)
                 self.assertFalse(port.is_open)
 
+    def test_fixed_timeout_does_not_reconfigure_open_port(self):
+        port = FakePort()
+        port.timeout = 0.2
+        output = io.BytesIO()
+        collect(port, output, 0.45, clock=lambda: port.now, fixed_timeout=True)
+        self.assertEqual(port.timeout, 0.2)
+        self.assertEqual(port.reads, 3)
+        self.assertEqual(output.getvalue(), port.payload)
+        self.assertFalse(port.is_open)
+
     def test_reset_and_cleanup(self):
         port = FakePort()
         collect(port, io.BytesIO(), 0.45, True, lambda: port.now, port.sleep)
@@ -99,6 +109,18 @@ class AutomationTests(unittest.TestCase):
         self.assertIn('passing test: yes', summarise(final + b'RESULT: STATIC STREAM PASS\n'))
         self.assertIn('passing test: no', summarise(
             final + b'RESULT: STATIC STREAM PASS\n' + final + b'STOP: validation failed\n'))
+
+    def test_rd_trace_failure_across_counter_wrap(self):
+        final = b'V4c FINAL frames=107/4096 processed=107\nSTOP: RD phase mismatch\n'
+        previous = (b'RD ROW index=3427 slot=3 expected=0 RCLK=29999 DCLK=29950 RD=29999 '
+                    b'level=0 notify=1 isrCycles=1234 sampleEndAfterISR=3900 failed=0\n')
+        failed = (b'RD ROW index=3428 slot=4 expected=0 RCLK=0 DCLK=78 RD=0 '
+                  b'level=1 notify=1 isrCycles=62674 sampleEndAfterISR=4000 failed=1\n')
+        summary = summarise(final + previous + failed)
+        self.assertIn('row index=3428, slot=4', summary)
+        self.assertIn('RCLK/DCLK/RD=1/128/1', summary)
+        self.assertIn('sampled RD level 0->1', summary)
+        self.assertNotIn('RD trace deltas', summarise(final + failed))
 
 
 if __name__ == '__main__':
