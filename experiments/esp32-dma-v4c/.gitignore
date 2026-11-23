@@ -8,3 +8,6 @@
 diagnostics/
 __pycache__/
 *.py[cod]
+
+# Local Wi-Fi settings for the opt-in WebSocket sender.
+/src/dmd_ws_local.h

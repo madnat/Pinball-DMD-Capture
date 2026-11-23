@@ -28,6 +28,11 @@ jobs:
         run: |
           pio run -d "$PROJECT_DIR" -e ttgo_tdisplay -t clean
           pio run -d "$PROJECT_DIR" -e ttgo_tdisplay
+      - name: Build V4c with RD tracing enabled
+        if: matrix.project == 'experiments/esp32-dma-v4c'
+        run: |
+          pio run -d experiments/esp32-dma-v4c -e ttgo_tdisplay_rd_trace
+          pio run -d experiments/esp32-dma-v4c -e ttgo_tdisplay_attract_sequence
       - name: Validate automation without hardware
         if: matrix.project == 'experiments/esp32-dma-v4c'
         run: |

@@ -22,6 +22,12 @@ def verify_device(port, devices):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', required=True, help='Explicit enumerated serial path')
+    parser.add_argument('--environment', choices=('ttgo_tdisplay', 'ttgo_tdisplay_rd_trace',
+                                 'ttgo_tdisplay_attract_sequence', 'ttgo_tdisplay_rd_filter_compare', 'ttgo_tdisplay_filtered_validate',
+                                 'ttgo_tdisplay_filtered_recovery', 'ttgo_tdisplay_filtered_recovery_slot20',
+                                 'ttgo_tdisplay_dmd_replica', 'ttgo_tdisplay_dmd_replica_fault_test', 'ttgo_tdisplay_dmd_replica_continuous',
+                                 'ttgo_tdisplay_dmd_replica_freezy', 'ttgo_tdisplay_dmd_replica_ws'),
+                        default='ttgo_tdisplay', help='PlatformIO firmware environment')
     parser.add_argument('--confirm-upload', action='store_true',
                         help='Required: confirm this invocation is an authorized flash')
     args = parser.parse_args()
@@ -34,7 +40,7 @@ def main():
         parser.exit(2, f'{error}\n')
     print(f'Verified {device.device}: {device.description}; '
           f'USB 10C4:EA60 serial={device.serial_number}', flush=True)
-    return subprocess.call([PIO, 'run', '-e', 'ttgo_tdisplay', '-t', 'upload',
+    return subprocess.call([PIO, 'run', '-e', args.environment, '-t', 'upload',
                             '--upload-port', args.port], cwd=ROOT)
 
 

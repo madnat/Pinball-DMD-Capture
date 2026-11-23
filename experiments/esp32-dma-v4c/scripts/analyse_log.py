@@ -5,6 +5,31 @@ from pathlib import Path
 import re
 
 
+RD_ROW = re.compile(
+    r'RD ROW index=(\d+) slot=(\d+) expected=([01]) RCLK=(\d+) DCLK=(\d+) '
+    r'RD=(\d+) level=([01]) notify=(\d+) isrCycles=(\d+) '
+    r'sampleEndAfterISR=(\d+) failed=([01])'
+)
+
+
+def rd_history_summary(final_text):
+    rows = [tuple(map(int, row.groups())) for row in RD_ROW.finditer(final_text)]
+    if not rows or not rows[-1][-1]:
+        return []
+    index, slot, expected, rclk, dclk, rd, level, notify, _, sample, _ = rows[-1]
+    result = [f'RD trace failure: row index={index}, slot={slot} (zero-based), '
+              f'expected RD level/edge={expected}, sampled level={level}, '
+              f'notifications={notify}, sample end={sample} cycles after RCLK ISR timestamp.']
+    if len(rows) > 1 and rows[-2][0] + 1 == index:
+        previous = rows[-2]
+        # These are the same modulo-30000 hardware counters used by the firmware.
+        deltas = tuple((current - old) % 30000
+                       for current, old in zip((rclk, dclk, rd), previous[3:6]))
+        result.append(f'RD trace deltas RCLK/DCLK/RD={deltas[0]}/{deltas[1]}/{deltas[2]}; '
+                      f'sampled RD level {previous[6]}->{level}.')
+    return result
+
+
 def summarise(raw):
     text = raw.decode('utf-8', errors='replace')
     lines = text.splitlines()
@@ -26,6 +51,7 @@ def summarise(raw):
         if line.startswith(prefixes) and line not in seen:
             result.append(line)
             seen.add(line)
+    result.extend(rd_history_summary(final_text))
     crc = [line for line in lines if 'firstCRC=' in line and 'lastCRC=' in line]
     if crc:
         result += ['First CRC report: ' + crc[0], 'Last CRC report: ' + crc[-1],
